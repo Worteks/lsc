@@ -778,25 +778,65 @@ public final class JndiServices {
 			final int scope) throws NamingException {
 		NamingEnumeration<SearchResult> ne = null;
 		List<String> iist = new ArrayList<String>();
+		String completedBaseDn = "";
+		if (base.length() > 0) {
+			completedBaseDn = "," + base;
+		}
 		try {
 			SearchControls sc = new SearchControls();
 			sc.setDerefLinkFlag(false);
 			sc.setReturningAttributes(new String[]{"1.1"});
 			sc.setSearchScope(scope);
 			sc.setReturningObjFlag(true);
-			ne = ctx.search(base, filter, sc);
 			
-			String completedBaseDn = "";
-			if (base.length() > 0) {
-				completedBaseDn = "," + base;
+			boolean requestPagedResults = false;
+
+			if (pageSize > 0) {
+				requestPagedResults = true;
+				LOGGER.debug("Using pagedResults control for {} entries at a time", pageSize);
+				ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, Control.CRITICAL)});
 			}
-			while (ne.hasMoreElements()) {
-				iist.add(((SearchResult) ne.next()).getName() + completedBaseDn);
+
+			byte[] pagedResultsResponse = null;
+			do {
+				ne = ctx.search(base, filter, sc);			
+				while (ne.hasMoreElements()) {
+					iist.add(((SearchResult) ne.next()).getName() + completedBaseDn);
+				}
+				Control[] respCtls = ctx.getResponseControls();
+				if (respCtls != null) {
+					for(Control respCtl : respCtls) {
+						if (requestPagedResults && respCtl instanceof PagedResultsResponseControl) {
+							pagedResultsResponse = ((PagedResultsResponseControl) respCtl).getCookie();
+						}
+					}
+				}
+	
+				if (requestPagedResults && pagedResultsResponse != null) {
+					ctx.setRequestControls(new Control[]{
+										new PagedResultsControl(pageSize, pagedResultsResponse, Control.CRITICAL)});
+				}
+
+			} while (pagedResultsResponse != null);
+
+			// clear requestControls for future use of the JNDI context
+			if (requestPagedResults) {
+				ctx.setRequestControls(null);
+			}
+		} catch (IOException e) {
+			// clear requestControls for future use of the JNDI context
+			ctx.setRequestControls(null);
+			LOGGER.error(e.toString());
+			if(LOGGER.isDebugEnabled()) {
+				LOGGER.debug(e.toString(), e);
 			}
 		} catch (NamingException e) {
+			// clear requestControls for future use of the JNDI context
+			ctx.setRequestControls(null);
 			LOGGER.error(e.toString());
-			LOGGER.debug(e.toString(), e);
-			throw e;
+			if(LOGGER.isDebugEnabled()) {
+				LOGGER.debug(e.toString(), e);
+			}
 		}
 		return iist;
 	}
